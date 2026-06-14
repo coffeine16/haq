@@ -1,0 +1,41 @@
+# Secrets — never commit these
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Actual filled-in configs (commit only the .example versions)
+server/docker-compose.yml
+server/Caddyfile
+
+# Terraform state and downloaded providers
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
+infra/crash.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# IDE / OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local test artifacts
+test_form.pdf
+preview-*.png
+*.log

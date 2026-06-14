@@ -1,0 +1,78 @@
+<svg width="100%" viewBox="0 0 680 560" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Haq deployment architecture</title>
+  <desc>User on Telegram connects via HTTPS through Caddy on AWS EC2 to n8n orchestrator, which calls Gemini for AI and Supabase Postgres for state, and a Flask PDF service for filled forms.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      .t { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; fill: #1F2937; }
+      .th { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; font-weight: 500; fill: #1F2937; }
+      .ts { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 12px; fill: #4B5563; }
+      .arr { stroke: #4B5563; stroke-width: 1.2; fill: none; }
+      .cgray { fill: #F1EFE8; stroke: #5F5E5A; }
+      .cpurple { fill: #EEEDFE; stroke: #534AB7; }
+      .camber { fill: #FAEEDA; stroke: #854F0B; }
+    </style>
+  </defs>
+
+  <!-- USER -->
+  <rect class="cgray" x="240" y="30" width="200" height="62" rx="10" stroke-width="0.6"/>
+  <text class="th" x="340" y="56" text-anchor="middle" dominant-baseline="central">Citizen on Telegram</text>
+  <text class="ts" x="340" y="76" text-anchor="middle" dominant-baseline="central">Hindi text, voice, photos</text>
+
+  <line x1="340" y1="92" x2="340" y2="140" class="arr" marker-end="url(#arrow)"/>
+  <text class="ts" x="350" y="118" text-anchor="start">HTTPS webhook</text>
+
+  <!-- EC2 CONTAINER -->
+  <rect class="cgray" x="40" y="150" width="600" height="220" rx="16" stroke-width="0.6" fill-opacity="0.5"/>
+  <text class="th" x="60" y="178" dominant-baseline="central">AWS EC2 · ap-south-1 · t3.small · Elastic IP</text>
+  <text class="ts" x="60" y="196" dominant-baseline="central">Provisioned via Terraform · Docker Compose stack</text>
+
+  <!-- Caddy -->
+  <rect class="cpurple" x="64" y="220" width="160" height="120" rx="10" stroke-width="0.6"/>
+  <text class="th" x="144" y="248" text-anchor="middle" dominant-baseline="central">Caddy</text>
+  <text class="ts" x="144" y="270" text-anchor="middle" dominant-baseline="central">Reverse proxy</text>
+  <text class="ts" x="144" y="288" text-anchor="middle" dominant-baseline="central">Auto Let's Encrypt</text>
+  <text class="ts" x="144" y="306" text-anchor="middle" dominant-baseline="central">haq.duckdns.org</text>
+  <text class="ts" x="144" y="324" text-anchor="middle" dominant-baseline="central">:443 → n8n :5678</text>
+
+  <!-- n8n -->
+  <rect class="cpurple" x="260" y="220" width="160" height="120" rx="10" stroke-width="0.6"/>
+  <text class="th" x="340" y="248" text-anchor="middle" dominant-baseline="central">n8n orchestrator</text>
+  <text class="ts" x="340" y="270" text-anchor="middle" dominant-baseline="central">5 workflows</text>
+  <text class="ts" x="340" y="288" text-anchor="middle" dominant-baseline="central">Inbound · Profiler</text>
+  <text class="ts" x="340" y="306" text-anchor="middle" dominant-baseline="central">Matcher · Executor</text>
+  <text class="ts" x="340" y="324" text-anchor="middle" dominant-baseline="central">Sentinel (hourly cron)</text>
+
+  <!-- PDF -->
+  <rect class="cpurple" x="456" y="220" width="160" height="120" rx="10" stroke-width="0.6"/>
+  <text class="th" x="536" y="248" text-anchor="middle" dominant-baseline="central">PDF service</text>
+  <text class="ts" x="536" y="270" text-anchor="middle" dominant-baseline="central">Flask + reportlab</text>
+  <text class="ts" x="536" y="288" text-anchor="middle" dominant-baseline="central">Branded pre-filled</text>
+  <text class="ts" x="536" y="306" text-anchor="middle" dominant-baseline="central">application forms</text>
+  <text class="ts" x="536" y="324" text-anchor="middle" dominant-baseline="central">POST /fill</text>
+
+  <!-- internal arrows -->
+  <line x1="224" y1="280" x2="259" y2="280" class="arr" marker-end="url(#arrow)"/>
+  <line x1="420" y1="280" x2="455" y2="280" class="arr" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+  <!-- EXTERNAL SERVICES -->
+  <rect class="camber" x="80" y="410" width="220" height="100" rx="10" stroke-width="0.6"/>
+  <text class="th" x="190" y="438" text-anchor="middle" dominant-baseline="central">Gemini API</text>
+  <text class="ts" x="190" y="460" text-anchor="middle" dominant-baseline="central">Intent classification</text>
+  <text class="ts" x="190" y="478" text-anchor="middle" dominant-baseline="central">Field extraction · Vision</text>
+  <text class="ts" x="190" y="496" text-anchor="middle" dominant-baseline="central">Hindi explainer · Grievances</text>
+
+  <rect class="camber" x="380" y="410" width="220" height="100" rx="10" stroke-width="0.6"/>
+  <text class="th" x="490" y="438" text-anchor="middle" dominant-baseline="central">Supabase Postgres</text>
+  <text class="ts" x="490" y="460" text-anchor="middle" dominant-baseline="central">users · schemes · documents</text>
+  <text class="ts" x="490" y="478" text-anchor="middle" dominant-baseline="central">applications · events</text>
+  <text class="ts" x="490" y="496" text-anchor="middle" dominant-baseline="central">Event-sourced state machine</text>
+
+  <path d="M310 340 L 250 408" class="arr" marker-end="url(#arrow)"/>
+  <path d="M370 340 L 430 408" class="arr" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+  <text class="ts" x="340" y="544" text-anchor="middle">All traffic terminates HTTPS at Caddy. n8n holds the agentic logic. Schemes are config rows, not code.</text>
+</svg>

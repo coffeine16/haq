@@ -1,0 +1,289 @@
+{
+  "name": "Haq 1 - Inbound Router",
+  "nodes": [
+    {
+      "parameters": { "updates": ["message"], "additionalFields": {} },
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [-1000, 300],
+      "webhookId": "haq-inbound",
+      "credentials": { "telegramApi": { "id": "REPLACE_ME", "name": "Haq Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const m = $json.message || {};\nreturn [{ json: {\n  chat_id: String(m.chat?.id || ''),\n  text: m.text || '',\n  has_voice: !!m.voice,\n  voice_file_id: m.voice?.file_id || null,\n  has_photo: !!m.photo,\n  photo_file_id: m.photo ? m.photo[m.photo.length - 1].file_id : null,\n  tg_name: [m.chat?.first_name, m.chat?.last_name].filter(Boolean).join(' ')\n}}];"
+      },
+      "name": "Normalize Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-780, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "outputKey": "photo", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.has_photo }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ] }, "renameOutput": true },
+            { "outputKey": "voice", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.has_voice }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ] }, "renameOutput": true }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "renameFallbackOutput": "text" }
+      },
+      "name": "Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [-560, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_PROFILER_WORKFLOW_ID",
+        "workflowInputs": { "mappingMode": "defineBelow", "value": { "chat_id": "={{ $json.chat_id }}", "photo_file_id": "={{ $json.photo_file_id }}", "tg_name": "={{ $json.tg_name }}" } },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "name": "Run Profiler",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [-340, 120],
+      "notes": "Photo received -> hand off to Workflow 2 (Profiler). Set the workflow ID after importing Haq_2_Profiler."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE-ASR-ENDPOINT/transcribe",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ file_id: $json.voice_file_id, bot_token: 'YOUR_BOT_TOKEN', language_hint: 'hi' }) }}",
+        "options": {}
+      },
+      "name": "ASR Transcribe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-340, 300],
+      "notes": "Replace with Bhashini / Sarvam / Google STT endpoint. Expected response: { transcript, language }. For the hackathon you can also run a tiny local service that downloads the Telegram voice file and calls the ASR API."
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Normalize Update').first().json;\nreturn [{ json: { ...prev, text: $json.transcript || '[voice unintelligible]', detected_language: $json.language || 'hi' } }];"
+      },
+      "name": "Merge Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (tg_chat_id, name, language)\nVALUES ($1, $2, COALESCE($3, 'hi'))\nON CONFLICT (tg_chat_id) DO UPDATE SET name = COALESCE(users.name, EXCLUDED.name)\nRETURNING id, language, profile;",
+        "options": { "queryReplacement": "={{ $json.chat_id }},{{ $json.tg_name }},{{ $json.detected_language || 'hi' }}" }
+      },
+      "name": "Upsert User",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [100, 300],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $json;\nconst msg = $('Message Type').first()?.json?.text ? $('Message Type').first().json : $('Merge Transcript').first().json;\nconst prompt = `Classify the user message into exactly one intent.\\nIntents: PROFILE_INFO, STATUS_QUERY, DOC_QUESTION, CONSENT_YES, OTP_REPLY, SMALLTALK.\\nRules: a 4-8 digit number alone => OTP_REPLY. 'haan'/'yes'/'ok'/'ha' => CONSENT_YES. Mentions of self/family/income/age/job/marital status => PROFILE_INFO. Asking about application progress => STATUS_QUERY.\\nReply with JSON only: {\\\"intent\\\": \\\"...\\\"}\\nMessage: ${msg.text}`;\nreturn [{ json: { user_id: user.id, language: user.language, profile: user.profile, chat_id: msg.chat_id, text: msg.text, body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 50 } } } }];"
+      },
+      "name": "Build Classifier Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "content-type", "value": "application/json" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "name": "Classify Intent (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300],
+      "notes": "Gemini flash-lite (cheapest) for high-volume intent routing. Paste your Gemini API key into the URL after key=."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Classifier Request').first().json;\nlet intent = 'SMALLTALK';\ntry {\n  const raw = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  intent = JSON.parse(raw.replace(/```json|```/g, '').trim()).intent || 'SMALLTALK';\n} catch (e) { /* default SMALLTALK */ }\nreturn [{ json: { ...ctx, intent } }];"
+      },
+      "name": "Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "outputKey": "PROFILE_INFO", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.intent }}", "rightValue": "PROFILE_INFO", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true },
+            { "outputKey": "STATUS_QUERY", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.intent }}", "rightValue": "STATUS_QUERY", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true },
+            { "outputKey": "CONSENT_YES", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.intent }}", "rightValue": "CONSENT_YES", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true },
+            { "outputKey": "OTP_REPLY", "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.intent }}", "rightValue": "OTP_REPLY", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "renameFallbackOutput": "SMALLTALK" }
+      },
+      "name": "Route Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $json.text;\nconst prompt = `Extract profile fields from this message. Output ONLY JSON with any of: { name, age, gender (male|female|other), marital_status (married|widowed|single|divorced), annual_income (number, INR), category (GEN|OBC|SC|ST), district, state (2-letter code, e.g. RJ), occupation }. Use null for absent fields, never guess income. Message: ${t}`;\nreturn [{ json: { ...$json, body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 200 } } } }];"
+      },
+      "name": "Build Field Extract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "content-type", "value": "application/json" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "name": "Extract Fields (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Field Extract').first().json;\nlet fields = {};\ntry {\n  const raw = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  fields = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch (e) {}\nconst clean = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null && v !== undefined && v !== ''));\nreturn [{ json: { user_id: ctx.user_id, chat_id: ctx.chat_id, fields: clean } }];"
+      },
+      "name": "Parse Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 60]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE users SET profile = profile || $1::jsonb WHERE id = $2 RETURNING id;",
+        "options": { "queryReplacement": "={{ JSON.stringify($json.fields) }},{{ $json.user_id }}" }
+      },
+      "name": "Merge Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1860, 60],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } }
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_MATCHER_WORKFLOW_ID",
+        "workflowInputs": { "mappingMode": "defineBelow", "value": { "user_id": "={{ $('Parse Fields').first().json.user_id }}", "chat_id": "={{ $('Parse Fields').first().json.chat_id }}" } },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "name": "Run Matcher",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [2080, 60]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.state, a.app_number, s.config->'name'->>'hi' AS scheme_hi, s.config->'name'->>'en' AS scheme_en,\n  (SELECT json_agg(json_build_object('at', e.created_at, 'kind', e.kind, 'payload', e.payload) ORDER BY e.created_at)\n   FROM events e WHERE e.application_id = a.id) AS timeline\nFROM applications a JOIN schemes s ON s.id = a.scheme_id\nWHERE a.user_id = $1 ORDER BY a.id DESC LIMIT 3;",
+        "options": { "queryReplacement": "={{ $json.user_id }}" }
+      },
+      "name": "Fetch Applications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1200, 240],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Parse Intent').first().json;\nconst apps = items.map(i => i.json);\nif (!apps.length || !apps[0].id) return [{ json: { chat_id: ctx.chat_id, reply: 'Aapka abhi koi aavedan nahi hai. Apne baare mein bataiye ya rashan card ki photo bhejiye.' } }];\nconst lines = [];\nfor (const a of apps) {\n  lines.push(`\\u{1F4C4} ${a.scheme_hi || a.scheme_en} \\u2014 ${a.state}${a.app_number ? ' (#' + a.app_number + ')' : ''}`);\n  for (const [i, e] of (a.timeline || []).entries()) {\n    const d = new Date(e.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });\n    lines.push(`  ${i + 1}. ${d} \\u2014 ${e.payload?.to || e.kind}`);\n  }\n}\nreturn [{ json: { chat_id: ctx.chat_id, reply: lines.join('\\n') } }];"
+      },
+      "name": "Render Timeline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1420, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH app AS (\n  INSERT INTO applications (user_id, scheme_id, state, deadline_at, tier)\n  SELECT $1, (SELECT (payload->>'scheme_id') FROM events WHERE user_id = $1 AND kind = 'matches_offered' ORDER BY id DESC LIMIT 1), 'ready', now(), NULL\n  RETURNING id\n)\nINSERT INTO events (application_id, user_id, kind, payload)\nSELECT id, $1, 'consent', jsonb_build_object('via', 'telegram') FROM app\nRETURNING application_id;",
+        "options": { "queryReplacement": "={{ $json.user_id }}" }
+      },
+      "name": "Create Application",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1200, 420],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } },
+      "notes": "Consent creates the application for the top scheme last offered by the Matcher (logged as a 'matches_offered' event). Required docs check is simplified to 'ready' for V0."
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_EXECUTOR_WORKFLOW_ID",
+        "workflowInputs": { "mappingMode": "defineBelow", "value": { "application_id": "={{ $json.application_id }}", "chat_id": "={{ $('Parse Intent').first().json.chat_id }}" } },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "name": "Run Executor",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1420, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:3100/jobs/{{ $json.profile?.active_job_id || $json.user_id }}/otp",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ otp: $json.text.trim() }) }}",
+        "options": {}
+      },
+      "name": "Forward OTP to Worker",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 600],
+      "notes": "Worker keys jobs by application_id. The Executor stores the active job id in users.profile.active_job_id when it dispatches Tier-2 — keep that convention."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || $('Parse Intent').first().json.chat_id }}",
+        "text": "={{ $json.reply || 'Theek hai! Main aapki sarkari yojanaon mein madad karta hoon. Apne baare mein bataiye, ya rashan card ki photo bhejiye. Main kabhi paise nahi maangunga.' }}",
+        "additionalFields": {}
+      },
+      "name": "Telegram Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1700, 480],
+      "credentials": { "telegramApi": { "id": "REPLACE_ME", "name": "Haq Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [ [ { "node": "Normalize Update", "type": "main", "index": 0 } ] ] },
+    "Normalize Update": { "main": [ [ { "node": "Message Type", "type": "main", "index": 0 } ] ] },
+    "Message Type": { "main": [ [ { "node": "Run Profiler", "type": "main", "index": 0 } ], [ { "node": "ASR Transcribe", "type": "main", "index": 0 } ], [ { "node": "Upsert User", "type": "main", "index": 0 } ] ] },
+    "ASR Transcribe": { "main": [ [ { "node": "Merge Transcript", "type": "main", "index": 0 } ] ] },
+    "Merge Transcript": { "main": [ [ { "node": "Upsert User", "type": "main", "index": 0 } ] ] },
+    "Upsert User": { "main": [ [ { "node": "Build Classifier Request", "type": "main", "index": 0 } ] ] },
+    "Build Classifier Request": { "main": [ [ { "node": "Classify Intent (LLM)", "type": "main", "index": 0 } ] ] },
+    "Classify Intent (LLM)": { "main": [ [ { "node": "Parse Intent", "type": "main", "index": 0 } ] ] },
+    "Parse Intent": { "main": [ [ { "node": "Route Intent", "type": "main", "index": 0 } ] ] },
+    "Route Intent": { "main": [ [ { "node": "Build Field Extract", "type": "main", "index": 0 } ], [ { "node": "Fetch Applications", "type": "main", "index": 0 } ], [ { "node": "Create Application", "type": "main", "index": 0 } ], [ { "node": "Forward OTP to Worker", "type": "main", "index": 0 } ], [ { "node": "Telegram Reply", "type": "main", "index": 0 } ] ] },
+    "Build Field Extract": { "main": [ [ { "node": "Extract Fields (LLM)", "type": "main", "index": 0 } ] ] },
+    "Extract Fields (LLM)": { "main": [ [ { "node": "Parse Fields", "type": "main", "index": 0 } ] ] },
+    "Parse Fields": { "main": [ [ { "node": "Merge Profile", "type": "main", "index": 0 } ] ] },
+    "Merge Profile": { "main": [ [ { "node": "Run Matcher", "type": "main", "index": 0 } ] ] },
+    "Fetch Applications": { "main": [ [ { "node": "Render Timeline", "type": "main", "index": 0 } ] ] },
+    "Render Timeline": { "main": [ [ { "node": "Telegram Reply", "type": "main", "index": 0 } ] ] },
+    "Create Application": { "main": [ [ { "node": "Run Executor", "type": "main", "index": 0 } ] ] },
+    "Forward OTP to Worker": { "main": [ [ { "node": "Telegram Reply", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

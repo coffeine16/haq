@@ -1,0 +1,173 @@
+{
+  "name": "Haq 2 - Profiler",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": { "values": [ { "name": "chat_id" }, { "name": "photo_file_id" }, { "name": "tg_name" } ] }
+      },
+      "name": "Profiler Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.photo_file_id }}",
+        "additionalFields": {}
+      },
+      "name": "Download Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-680, 300],
+      "credentials": { "telegramApi": { "id": "REPLACE_ME", "name": "Haq Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bin = $input.first().binary?.data;\nconst sizeKb = bin ? Math.round(Buffer.from(bin.data, 'base64').length / 1024) : 0;\nconst pass = sizeKb >= 40; // crude blur/quality proxy for V0: tiny files are unusable\nreturn [{ json: { ...$('Profiler Trigger').first().json, size_kb: sizeKb, quality_pass: pass, image_b64: pass ? bin.data : null, mime: bin?.mimeType || 'image/jpeg' } }];"
+      },
+      "name": "Quality Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "notes": "V0 proxy: reject files under ~40KB (usually blurry/cropped thumbnails). Upgrade later to a sharpness check in the worker service."
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.quality_pass }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ] }
+      },
+      "name": "Quality OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-240, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "Photo saaf nahi aayi. Kripya din ki roshni mein, phone ko sthir rakh kar, poora card dikhate hue dobara photo bhejiye. \ud83d\udcf8",
+        "additionalFields": {}
+      },
+      "name": "Ask Retake",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [-20, 480],
+      "credentials": { "telegramApi": { "id": "REPLACE_ME", "name": "Haq Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prompt = `Extract fields from this Indian identity/welfare document image. Output ONLY JSON: { \\\"doc_type\\\": \\\"ration_card|aadhaar|income_cert|other\\\", \\\"fields\\\": { \\\"name\\\": null, \\\"dob_or_age\\\": null, \\\"gender\\\": null, \\\"district\\\": null, \\\"state\\\": null, \\\"category\\\": null, \\\"annual_income\\\": null, \\\"marital_status\\\": null }, \\\"confidence\\\": {}, \\\"aadhaar_last4\\\": null }. If an Aadhaar number is visible return ONLY its last 4 digits in aadhaar_last4. Use null for absent fields. Never guess income.`;\nreturn [{ json: { ...$json, body: { contents: [{ parts: [ { inline_data: { mime_type: $json.mime, data: $json.image_b64 } }, { text: prompt } ] }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 500 } } } }];"
+      },
+      "name": "Build Vision Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "content-type", "value": "application/json" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": { "timeout": 60000 }
+      },
+      "name": "Vision Extract (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Quality Gate').first().json;\nlet out = { doc_type: 'other', fields: {}, aadhaar_last4: null };\ntry {\n  const raw = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  out = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch (e) {}\nconst f = out.fields || {};\nconst profile = {};\nif (f.name) profile.name = f.name;\nif (f.gender) profile.gender = String(f.gender).toLowerCase();\nif (f.district) profile.district = f.district;\nif (f.state) profile.state = f.state;\nif (f.category) profile.category = f.category;\nif (f.marital_status) profile.marital_status = String(f.marital_status).toLowerCase();\nif (f.annual_income) profile.annual_income = Number(f.annual_income);\nif (f.dob_or_age) {\n  const n = Number(f.dob_or_age);\n  if (!isNaN(n) && n > 0 && n < 120) profile.age = n;\n  else { const y = new Date(f.dob_or_age).getFullYear(); if (y > 1900) profile.age = new Date().getFullYear() - y; }\n}\nreturn [{ json: { chat_id: ctx.chat_id, doc_type: out.doc_type, doc_fields: f, aadhaar_last4: out.aadhaar_last4 || null, profile_patch: profile } }];"
+      },
+      "name": "Parse & Mask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 240],
+      "notes": "Aadhaar: only last 4 digits ever reach the database."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE users SET profile = profile || $2::jsonb\n  WHERE tg_chat_id = $1 RETURNING id\n)\nINSERT INTO documents (user_id, doc_type, fields, quality_score)\nSELECT id, $3, $4::jsonb, 1.0 FROM u\nRETURNING user_id;",
+        "options": { "queryReplacement": "={{ $json.chat_id }},{{ JSON.stringify($json.profile_patch) }},{{ $json.doc_type }},{{ JSON.stringify({ ...$json.doc_fields, aadhaar_last4: $json.aadhaar_last4 }) }}" }
+      },
+      "name": "Store Doc + Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [640, 240],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT u.id AS user_id, u.profile,\n  (SELECT json_agg(DISTINCT r->>'field')\n   FROM schemes s, jsonb_array_elements(s.config->'eligibility'->'all') r\n   WHERE s.active) AS needed_fields\nFROM users u WHERE u.tg_chat_id = $1;",
+        "options": { "queryReplacement": "={{ $('Parse & Mask').first().json.chat_id }}" }
+      },
+      "name": "Compute Needed Fields",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [860, 240],
+      "credentials": { "postgres": { "id": "REPLACE_ME", "name": "Haq Postgres" } },
+      "notes": "Config drives the questions: the set of fields used by any active scheme's rules. Adding scheme #16 automatically teaches the Profiler its new field."
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst profile = j.profile || {};\nconst needed = (j.needed_fields || []).filter(Boolean);\nconst missing = needed.filter(f => profile[f] === undefined || profile[f] === null);\nconst qs = {\n  age: 'Aapki umar kitni hai?',\n  gender: 'Aap mahila hain ya purush?',\n  marital_status: 'Aapki vaivahik sthiti kya hai? (vivahit / vidhva / avivahit)',\n  annual_income: 'Aapke parivaar ki saalana aamdani lagbhag kitni hai?',\n  category: 'Aapki shreni kya hai? (GEN / OBC / SC / ST)',\n  district: 'Aap kis zile mein rehte hain?',\n  state: 'Aap kis rajya mein rehte hain?'\n};\nconst ask = missing.slice(0, 2).map(f => qs[f] || `Kripya bataiye: ${f}`);\nreturn [{ json: { user_id: j.user_id, chat_id: $('Parse & Mask').first().json.chat_id, has_gaps: ask.length > 0, question: ask.join('\\n') } }];"
+      },
+      "name": "Gap Questions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "typeValidation": "strict" }, "combinator": "and", "conditions": [ { "leftValue": "={{ $json.has_gaps }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ] }
+      },
+      "name": "Has Gaps?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Card mil gaya, dhanyavaad! \u2705 Bas ek-do baatein aur:\n{{ $json.question }}",
+        "additionalFields": {}
+      },
+      "name": "Ask Gap Question",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1520, 140],
+      "credentials": { "telegramApi": { "id": "REPLACE_ME", "name": "Haq Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_MATCHER_WORKFLOW_ID",
+        "workflowInputs": { "mappingMode": "defineBelow", "value": { "user_id": "={{ $json.user_id }}", "chat_id": "={{ $json.chat_id }}" } },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "name": "Run Matcher",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1520, 340]
+    }
+  ],
+  "connections": {
+    "Profiler Trigger": { "main": [ [ { "node": "Download Photo", "type": "main", "index": 0 } ] ] },
+    "Download Photo": { "main": [ [ { "node": "Quality Gate", "type": "main", "index": 0 } ] ] },
+    "Quality Gate": { "main": [ [ { "node": "Quality OK?", "type": "main", "index": 0 } ] ] },
+    "Quality OK?": { "main": [ [ { "node": "Build Vision Request", "type": "main", "index": 0 } ], [ { "node": "Ask Retake", "type": "main", "index": 0 } ] ] },
+    "Build Vision Request": { "main": [ [ { "node": "Vision Extract (LLM)", "type": "main", "index": 0 } ] ] },
+    "Vision Extract (LLM)": { "main": [ [ { "node": "Parse & Mask", "type": "main", "index": 0 } ] ] },
+    "Parse & Mask": { "main": [ [ { "node": "Store Doc + Profile", "type": "main", "index": 0 } ] ] },
+    "Store Doc + Profile": { "main": [ [ { "node": "Compute Needed Fields", "type": "main", "index": 0 } ] ] },
+    "Compute Needed Fields": { "main": [ [ { "node": "Gap Questions", "type": "main", "index": 0 } ] ] },
+    "Gap Questions": { "main": [ [ { "node": "Has Gaps?", "type": "main", "index": 0 } ] ] },
+    "Has Gaps?": { "main": [ [ { "node": "Ask Gap Question", "type": "main", "index": 0 } ], [ { "node": "Run Matcher", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
