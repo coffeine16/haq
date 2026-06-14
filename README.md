@@ -93,7 +93,7 @@ haq/
 ├── infra/              # Terraform — AWS EC2, VPC, security group, Elastic IP
 ├── server/             # docker-compose.example.yml, Caddyfile.example, PDF service
 │   └── pdf_service/    # Flask + reportlab branded forms generator
-├── workflows/          # 5 n8n workflow JSONs (sanitized — keys are placeholders)
+├── n8n_workflows/      # 5 n8n workflow JSONs (exported from live AWS deployment)
 ├── db/                 # schema.sql, scheme_seed_pack.sql, demo_helpers.sql
 └── docs/               # PRODUCT.md, BUILD_GUIDE.md, architecture.svg
 ```
@@ -130,20 +130,20 @@ docker compose up -d
 # 4. Import the workflows into n8n
 # Open https://<your-duckdns-subdomain>
 # Create owner account.
-# Import each Haq_*.json from workflows/.
-# Follow workflows/README.md for credential and Gemini-key wiring.
+# Import each "Haq *.json" file from n8n_workflows/.
+# Follow n8n_workflows/README.md for credential and Gemini-key wiring.
 
 # 5. Set the Telegram webhook
 # Use the Production URL shown by the Telegram Trigger node in Workflow 1.
 ```
 
-Full step-by-step in [`infra/README.md`](infra/README.md), [`server/README.md`](server/README.md), [`workflows/README.md`](workflows/README.md), and [`db/README.md`](db/README.md).
+Full step-by-step in [`infra/README.md`](infra/README.md), [`server/README.md`](server/README.md), [`n8n_workflows/README.md`](n8n_workflows/README.md), and [`db/README.md`](db/README.md).
 
 ## What's next (roadmap)
 
 This V0 proves the agentic loop end-to-end on one channel, one state, with 12 schemes. The product is built around a roadmap that the current stack extends cleanly.
 
-**V1 — next 3 months**
+**V1 — next 7-15 days**
 - WhatsApp Business API (verified) replacing Telegram for distribution
 - Voice in & out (Bhashini ASR/TTS — pipeline already wired in Workflow 1, just needs the endpoint)
 - DigiLocker for document fetch
@@ -151,7 +151,7 @@ This V0 proves the agentic loop end-to-end on one channel, one state, with 12 sc
 - Tier-2 Playwright portal automation for one flagship scheme (Tier-3 PDF is the always-on fallback)
 - RTI auto-drafting alongside CPGRAMS
 
-**Scale — 6–18 months**
+**Scale — 1-2 months**
 - Multi-state coverage; the department-SLA dataset becomes a live bureaucracy map (the compounding moat)
 - **Layer 2 — Defend:** insurance claim appeals, consumer complaints, wrongful-rejection appeals
 - **Layer 3 — Grow:** MSME enablement for India's 63 million micro-businesses (Udyam, Mudra, FSSAI, GST basics)
