@@ -1,0 +1,370 @@
+{
+  "name": "Haq 3 - Matcher",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "user_id",
+              "type": "number"
+            },
+            {
+              "name": "chat_id"
+            }
+          ]
+        }
+      },
+      "name": "Matcher Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -880,
+        144
+      ],
+      "id": "69b47214-6757-4f50-a6c7-49d1d05dd1ae"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT u.profile, u.language,\n  (SELECT json_agg(json_build_object('id', s.id, 'config', s.config)) FROM schemes s WHERE s.active) AS schemes\nFROM users u WHERE u.id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.user_id }}"
+        }
+      },
+      "name": "Fetch Profile + Schemes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -656,
+        144
+      ],
+      "id": "1a9b45fb-86a2-4cd2-ad38-2f46b31c1e43",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== Deterministic eligibility engine — zero LLM tokens =====\nconst trig = $('Matcher Trigger').first().json;\nconst { profile = {}, schemes = [], language = 'hi' } = $json;\nconst ops = {\n  eq:  (a, b) => String(a).toLowerCase() === String(b).toLowerCase(),\n  neq: (a, b) => String(a).toLowerCase() !== String(b).toLowerCase(),\n  gte: (a, b) => Number(a) >= Number(b),\n  lte: (a, b) => Number(a) <= Number(b),\n  in:  (a, b) => Array.isArray(b) && b.map(x => String(x).toLowerCase()).includes(String(a).toLowerCase()),\n};\nfunction evalNode(rule, prof, unknowns) {\n  if (rule.all) return rule.all.every(r => evalNode(r, prof, unknowns));\n  if (rule.any) return rule.any.some(r => evalNode(r, prof, unknowns));\n  const v = prof[rule.field];\n  if (v === undefined || v === null) { unknowns.push(rule.field); return true; }\n  return ops[rule.op] ? ops[rule.op](v, rule.value) : false;\n}\nconst results = (schemes || []).map(s => {\n  const unknowns = [];\n  const eligible = evalNode(s.config.eligibility || { all: [] }, profile, unknowns);\n  const b = s.config.benefit || {};\n  const amt = b.amount_inr || 0;\n  let annual;\n  if (b.type === 'monthly_cash') annual = amt * 12;\n  else if (b.type === 'insurance_cover') annual = amt * 0.01;\n  else annual = amt;\n  const effort = s.config.effort_score || 3;\n  return { id: s.id, name: s.config.name, benefit: s.config.benefit,\n           eligible, unknown_fields: [...new Set(unknowns)], score: annual / effort };\n});\nconst matches = results.filter(r => r.eligible && r.unknown_fields.length === 0)\n                       .sort((a, b) => b.score - a.score).slice(0, 3);\nconst needInfo = results.filter(r => r.eligible && r.unknown_fields.length > 0)\n                        .sort((a, b) => b.score - a.score);\nreturn [{ json: { user_id: trig.user_id, chat_id: trig.chat_id, language, profile, matches, need_info: needInfo } }];"
+      },
+      "name": "Eligibility Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        144
+      ],
+      "id": "388d2ba2-0011-4ac2-9cdf-248a1c22bc99"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.matches.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Any Matches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        144
+      ],
+      "id": "f0d0ea9b-27ad-4110-9a8c-bf2bb7cf70f7"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst unknown = j.need_info[0]?.unknown_fields?.[0];\nconst qs = {\n  age: 'Aapki umar kitni hai?', gender: 'Aap mahila hain ya purush?',\n  marital_status: 'Aapki vaivahik sthiti kya hai?',\n  annual_income: 'Parivaar ki saalana aamdani lagbhag kitni hai?',\n  category: 'Aapki shreni? (GEN/OBC/SC/ST)', district: 'Aapka zila?', state: 'Aapka rajya?'\n};\nconst text = unknown\n  ? `Ek jankari aur chahiye taaki main sahi yojana dhundh sakun: ${qs[unknown] || unknown}`\n  : 'Abhi koi yojana match nahi hui. Apne baare mein thoda aur bataiye — umar, kaam, parivaar.';\nreturn [{ json: { chat_id: j.chat_id, text } }];"
+      },
+      "name": "Ask Highest-Impact Field",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "id": "c678dc3a-b697-4cc4-9346-f72fbd83e079"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst summary = j.matches.map((m, i) => `${i + 1}. ${m.name?.hi || m.name?.en} — ${m.benefit?.type === 'monthly_cash' ? '\\u20B9' + m.benefit.amount_inr + '/mahina' : '\\u20B9' + (m.benefit?.amount_inr || '?')}`).join('\\n');\nconst prompt = `You are Haq, a warm plain-spoken assistant. Language: ${j.language === 'hi' ? 'Hindi (Devanagari)' : 'simple English'}.\\nExplain these scheme matches to a user who may not read well. Short sentences. Concrete amounts first. No jargon. Never promise approval; say they appear eligible. End with exactly one question: consent to apply for scheme #1 (tell them to reply HAAN / YES).\\nMatches:\\n${summary}`;\nreturn [{ json: { ...j, body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 2000, thinkingConfig: { thinkingBudget: 0 } } } } }];"
+      },
+      "name": "Build Explainer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e22940b6-a310-4ef1-81b9-689dae54a05c"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=AQ.............",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "name": "Vernacular Explainer (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "59048d83-a409-4bb4-82a3-1576941667a6"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Explainer').first().json;\nlet text = ($json.candidates?.[0]?.content?.parts?.[0]?.text || '').trim() || 'Aap in yojanaon ke liye paatr lagte hain.';\ntext = text.replace(/\\*\\*/g, '').replace(/\\*/g, '');\nreturn [{ json: { chat_id: ctx.chat_id, user_id: ctx.user_id, top_scheme_id: ctx.matches[0].id, text } }];"
+      },
+      "name": "Parse Explainer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "2ae7a0dd-5bd7-4be4-9875-a8c3a58c586e"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO events (user_id, kind, payload)\nVALUES ($1, 'matches_offered', jsonb_build_object('scheme_id', $2))\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $json.user_id }},{{ $json.top_scheme_id }}"
+        }
+      },
+      "name": "Log Offer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        672,
+        0
+      ],
+      "id": "39e506ef-b982-4d8b-9f43-a33498bfb8df",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "The Inbound workflow's CONSENT_YES branch reads this event to know which scheme the user is consenting to."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "name": "Send to User",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        144
+      ],
+      "id": "99ddd375-8703-49ed-9c95-b60487bc9d67",
+      "webhookId": "232ac390-b436-4bec-9fa2-90774e58f198",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9e0583af-eb33-4c67-8d24-6a6453fa438a",
+              "name": "chat_id",
+              "value": "={{ $('Parse Explainer').item.json.chat_id || $('Ask Highest-Impact Field').item.json.chat_id }}",
+              "type": "string"
+            },
+            {
+              "id": "876cafcc-165b-4a62-a5cf-d95f33135a43",
+              "name": "text",
+              "value": "={{ $('Parse Explainer').item.json.text || $('Ask Highest-Impact Field').item.json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        0
+      ],
+      "id": "8bd6c8f1-ea43-47f4-8ee6-498e088ccd19",
+      "name": "Prepare Reply"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Matcher Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Profile + Schemes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Profile + Schemes": {
+      "main": [
+        [
+          {
+            "node": "Eligibility Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eligibility Engine": {
+      "main": [
+        [
+          {
+            "node": "Any Matches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Matches?": {
+      "main": [
+        [
+          {
+            "node": "Build Explainer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask Highest-Impact Field",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Explainer": {
+      "main": [
+        [
+          {
+            "node": "Vernacular Explainer (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vernacular Explainer (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Parse Explainer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Explainer": {
+      "main": [
+        [
+          {
+            "node": "Log Offer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Offer": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Highest-Impact Field": {
+      "main": [
+        [
+          {
+            "node": "Send to User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reply": {
+      "main": [
+        [
+          {
+            "node": "Send to User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "fc200b6c-5c43-473e-95eb-52f7e9192885",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6709d43f42265099711ffb435f8a201336ee4407b1919d9f157b2bf639ffa29"
+  },
+  "nodeGroups": [],
+  "id": "vOOuYYXW5ygFhQdv",
+  "tags": []
+}

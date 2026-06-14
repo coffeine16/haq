@@ -1,0 +1,493 @@
+{
+  "name": "Haq 2 - Profiler",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "chat_id"
+            },
+            {
+              "name": "photo_file_id"
+            },
+            {
+              "name": "tg_name"
+            }
+          ]
+        }
+      },
+      "name": "Profiler Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2416,
+        160
+      ],
+      "id": "91734cd8-a9b2-4083-9eb7-66b43320b90c"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.photo_file_id }}",
+        "additionalFields": {}
+      },
+      "name": "Download Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2208,
+        160
+      ],
+      "id": "c96f3aab-e152-479e-9933-52fd6c5affe3",
+      "webhookId": "795ad426-dd3d-4729-949a-fb9cddba8bc1",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const binItem = $input.first().binary?.data;\nconst buffer = binItem ? await this.helpers.getBinaryDataBuffer(0, 'data') : null;\nconst sizeKb = buffer ? Math.round(buffer.length / 1024) : 0;\nconst pass = true;\nreturn [{ json: {\n  ...$('Profiler Trigger').first().json,\n  size_kb: sizeKb,\n  quality_pass: pass,\n  image_b64: buffer ? buffer.toString('base64') : null,\n  mime: binItem?.mimeType || 'image/jpeg'\n}}];"
+      },
+      "name": "Quality Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        160
+      ],
+      "id": "a7e186d9-0f84-4233-9e65-66ca52f4550b",
+      "notes": "V0 proxy: reject files under ~40KB (usually blurry/cropped thumbnails). Upgrade later to a sharpness check in the worker service."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.quality_pass }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Quality OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1760,
+        160
+      ],
+      "id": "21432b70-bdb5-4074-9369-f2d59f53ceb3"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "Photo saaf nahi aayi. Kripya din ki roshni mein, phone ko sthir rakh kar, poora card dikhate hue dobara photo bhejiye. 📸",
+        "additionalFields": {}
+      },
+      "name": "Ask Retake",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1536,
+        352
+      ],
+      "id": "c954b25c-42d3-4693-b2c0-e3f87f714795",
+      "webhookId": "625f168d-7c64-48b3-9efa-d49657e82cbe",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prompt = `Extract fields from this Indian identity/welfare document image. Output ONLY JSON: { \\\"doc_type\\\": \\\"ration_card|aadhaar|income_cert|other\\\", \\\"fields\\\": { \\\"name\\\": null, \\\"dob_or_age\\\": null, \\\"gender\\\": null, \\\"district\\\": null, \\\"state\\\": null, \\\"category\\\": null, \\\"annual_income\\\": null, \\\"marital_status\\\": null }, \\\"confidence\\\": {}, \\\"aadhaar_last4\\\": null }. If an Aadhaar number is visible return ONLY its last 4 digits in aadhaar_last4. Use null for absent fields. Never guess income.`;\nreturn [{ json: { ...$json, body: { contents: [{ parts: [ { inline_data: { mime_type: $json.mime, data: $json.image_b64 } }, { text: prompt } ] }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2000, thinkingConfig: { thinkingBudget: 0 } } } } }];"
+      },
+      "name": "Build Vision Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        112
+      ],
+      "id": "c4236c1e-c307-4d09-b656-71e0d6491132"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=AQ.................xxxxxxxxxxxx",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Vision Extract (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1328,
+        112
+      ],
+      "id": "38839005-d3ce-4c6c-a0c4-159e8e34e1ec"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Quality Gate').first().json;\nlet out = { doc_type: 'other', fields: {}, aadhaar_last4: null };\ntry {\n  const raw = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  out = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch (e) {}\nconst f = out.fields || {};\nconst profile = {};\nif (f.name) profile.name = f.name;\nif (f.gender) profile.gender = String(f.gender).toLowerCase();\nif (f.district) profile.district = f.district;\nif (f.state) profile.state = f.state;\nif (f.category) profile.category = f.category;\nif (f.marital_status) profile.marital_status = String(f.marital_status).toLowerCase();\nif (f.annual_income) profile.annual_income = Number(f.annual_income);\nif (f.dob_or_age) {\n  const n = Number(f.dob_or_age);\n  if (!isNaN(n) && n > 0 && n < 120) profile.age = n;\n  else { const y = new Date(f.dob_or_age).getFullYear(); if (y > 1900) profile.age = new Date().getFullYear() - y; }\n}\nreturn [{ json: { chat_id: ctx.chat_id, doc_type: out.doc_type, doc_fields: f, aadhaar_last4: out.aadhaar_last4 || null, profile_patch: profile } }];"
+      },
+      "name": "Parse & Mask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        112
+      ],
+      "id": "a50da18e-45ff-4d3f-b4f8-3f42f193fd74",
+      "notes": "Aadhaar: only last 4 digits ever reach the database."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE users SET profile = profile || '{{ JSON.stringify($json.profile_patch) }}'::jsonb\n  WHERE tg_chat_id = '{{ $json.chat_id }}' RETURNING id\n)\nINSERT INTO documents (user_id, doc_type, fields, quality_score)\nSELECT id, '{{ $json.doc_type }}', '{{ JSON.stringify({ ...$json.doc_fields, aadhaar_last4: $json.aadhaar_last4 }) }}'::jsonb, 1.0 FROM u\nRETURNING user_id;",
+        "options": {
+          "queryReplacement": "="
+        }
+      },
+      "name": "Store Doc + Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -880,
+        112
+      ],
+      "id": "fe0ba9b2-289c-41f5-b99b-b867a1533f6e",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT u.id AS user_id, u.profile,\n  (SELECT json_agg(DISTINCT r->>'field')\n   FROM schemes s, jsonb_array_elements(s.config->'eligibility'->'all') r\n   WHERE s.active) AS needed_fields\nFROM users u WHERE u.tg_chat_id = $1;",
+        "options": {
+          "queryReplacement": "={{ $('Parse & Mask').first().json.chat_id }}"
+        }
+      },
+      "name": "Compute Needed Fields",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -656,
+        112
+      ],
+      "id": "ba43bf33-5935-472f-8ea2-b509eb652893",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Config drives the questions: the set of fields used by any active scheme's rules. Adding scheme #16 automatically teaches the Profiler its new field."
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst profile = j.profile || {};\nconst needed = (j.needed_fields || []).filter(Boolean);\nconst missing = needed.filter(f => profile[f] === undefined || profile[f] === null);\nconst qs = {\n  age: 'Aapki umar kitni hai?',\n  gender: 'Aap mahila hain ya purush?',\n  marital_status: 'Aapki vaivahik sthiti kya hai? (vivahit / vidhva / avivahit)',\n  annual_income: 'Aapke parivaar ki saalana aamdani lagbhag kitni hai?',\n  category: 'Aapki shreni kya hai? (GEN / OBC / SC / ST)',\n  district: 'Aap kis zile mein rehte hain?',\n  state: 'Aap kis rajya mein rehte hain?',\n  occupation: 'Aap kya kaam karte hain?',\n  daughter_marriage: 'Kya aapki beti ki shaadi anewale samay mein hai?',\n  breadwinner_died: 'Kya parivar ke mukhya kamane wale ka dehant ho gaya hai?',\n  disability: 'Kya aap ya parivar mein koi divyang hai?',\n  caring_for_orphan: 'Kya aap kisi anath ya zaruratmand bachche ki dekhbhal kar rahe hain?'\n};\nconst ask = missing.slice(0, 2).map(f => qs[f] || `Kripya bataiye: ${f}`);\nreturn [{ json: { user_id: j.user_id, chat_id: $('Parse & Mask').first().json.chat_id, has_gaps: ask.length > 0, question: ask.join('\\n') } }];"
+      },
+      "name": "Gap Questions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ],
+      "id": "e6afe98b-1cc7-4006-8141-d271d7195cda"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_gaps }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Has Gaps?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ],
+      "id": "e2911e18-66bf-4e0e-866b-52622b053a14"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Card mil gaya, dhanyavaad! ✅ Bas ek-do baatein aur:\n{{ $json.question }}",
+        "additionalFields": {}
+      },
+      "name": "Ask Gap Question",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "007a41f9-12dc-4a34-b3c8-1c079c5d5038",
+      "webhookId": "b7566492-d97c-4739-a4ef-2925f940304e",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "vOOuYYXW5ygFhQdv",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/vOOuYYXW5ygFhQdv",
+          "cachedResultName": "Haq 3 - Matcher"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "user_id": "={{ $('Gap Questions').item.json.user_id }}",
+            "chat_id": "={{ $('Gap Questions').item.json.chat_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "user_id",
+              "displayName": "user_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": true,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        208
+      ],
+      "id": "8d5fe0fe-4eef-42dc-9a69-d6aeaed3646b",
+      "name": "Run Matcher"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Profiler Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Photo": {
+      "main": [
+        [
+          {
+            "node": "Quality Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Gate": {
+      "main": [
+        [
+          {
+            "node": "Quality OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality OK?": {
+      "main": [
+        [
+          {
+            "node": "Build Vision Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask Retake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Vision Request": {
+      "main": [
+        [
+          {
+            "node": "Vision Extract (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Extract (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Parse & Mask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Mask": {
+      "main": [
+        [
+          {
+            "node": "Store Doc + Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Doc + Profile": {
+      "main": [
+        [
+          {
+            "node": "Compute Needed Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Needed Fields": {
+      "main": [
+        [
+          {
+            "node": "Gap Questions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gap Questions": {
+      "main": [
+        [
+          {
+            "node": "Has Gaps?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Gaps?": {
+      "main": [
+        [
+          {
+            "node": "Ask Gap Question",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run Matcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6cff986d-407d-4d00-8b9f-cbc9e5d6cf31",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6709d43f42265099711ffb435f8a201336ee4407b1919d9f157b2bf639ffa29"
+  },
+  "nodeGroups": [],
+  "id": "wswx5dUK1qbJMckN",
+  "tags": []
+}

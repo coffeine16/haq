@@ -1,0 +1,747 @@
+{
+  "name": "Haq 4 - Executor",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "application_id"
+            },
+            {
+              "name": "chat_id"
+            }
+          ]
+        }
+      },
+      "name": "Executor Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -656,
+        112
+      ],
+      "id": "48e912c1-87be-4b30-b861-83dd621711ed"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id AS application_id, a.user_id, u.tg_chat_id AS chat_id, u.profile, u.language,\n  s.id AS scheme_id, s.config,\n  (s.config->'execution'->>'tier2_recipe') AS tier2_recipe,\n  (s.config->'execution'->>'tier3_template') AS tier3_template\nFROM applications a\nJOIN users u ON u.id = a.user_id\nJOIN schemes s ON s.id = a.scheme_id\nWHERE a.id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Load Application",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -448,
+        112
+      ],
+      "id": "8087a228-fcc8-44d5-8661-b0ab5917abc6",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tier2_recipe }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Has Tier-2 Recipe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ],
+      "id": "c3c6092a-774c-4c68-881f-06152699bd3b"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3100/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ app_id: $json.application_id, recipe_id: $json.tier2_recipe, profile: $json.profile, callback_url: 'http://localhost:5678/webhook/haq-worker-callback' }) }}",
+        "options": {}
+      },
+      "name": "Dispatch Tier-2 Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "2b481fb9-9daa-4524-8368-6d19dc1990ff",
+      "notes": "Worker (worker/server.js) loads the recipe by id from its recipes/ folder. Callback URL must be reachable from the worker — same machine in V0."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'submitting', now() + interval '1 hour', jsonb_build_object('tier', 2));\nUPDATE applications SET tier = 2 WHERE id = $1;\nUPDATE users SET profile = profile || jsonb_build_object('active_job_id', $1::text)\nWHERE id = (SELECT user_id FROM applications WHERE id = $1);",
+        "options": {
+          "queryReplacement": "={{ $('Load Application').first().json.application_id }}"
+        }
+      },
+      "name": "Transition: submitting",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        0
+      ],
+      "id": "e7798ea3-36e7-458c-b43e-eb6dc834b7d5",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Stores active_job_id so the Inbound OTP_REPLY branch knows where to forward the code."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://pdf:3200/fill",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ scheme_id: $json.scheme_id, template: $json.tier3_template, profile: $json.profile }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "name": "Generate Tier-3 PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        224
+      ],
+      "id": "9f1e39c3-5796-4fae-be8c-7ec75c00fc8e",
+      "notes": "pdf/fill.js service: input scheme + profile, output filled PDF binary."
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $('Load Application').first().json.chat_id }}",
+        "binaryData": true,
+        "additionalFields": {
+          "caption": "Aapka aavedan form taiyaar hai ✅ Ise print karke, neeche hastakshar karke, apne najdeeki karyalay mein jama karein. Jama karne ke baad mujhe 'JAMA' likh kar batayein — main iski nigrani karunga."
+        }
+      },
+      "name": "Send PDF",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        224
+      ],
+      "id": "9929db26-b5b2-476b-9881-171b644b93a8",
+      "webhookId": "20ff79a1-b54a-4165-bbe8-e7dc36ea97b6",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'pdf_sent', now() + interval '3 days', jsonb_build_object('tier', 3));\nUPDATE applications SET tier = 3 WHERE id = $1;",
+        "options": {
+          "queryReplacement": "={{ $('Load Application').first().json.application_id }}"
+        }
+      },
+      "name": "Transition: pdf_sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        448,
+        224
+      ],
+      "id": "c0d684e8-b42a-4b5e-8992-c72b1846244e",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "haq-worker-callback",
+        "options": {}
+      },
+      "name": "Worker Callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        544
+      ],
+      "webhookId": "haq-worker-callback",
+      "id": "d552ae25-2f2a-454b-ae83-31c09917c8ad"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id AS application_id, a.meta, u.tg_chat_id AS chat_id, u.id AS user_id\nFROM applications a JOIN users u ON u.id = a.user_id WHERE a.id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.body.app_id }}"
+        }
+      },
+      "name": "Load App (Callback)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -448,
+        544
+      ],
+      "id": "40158d35-836e-4e4a-a99c-f85f769ea7ca",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cb = $('Worker Callback').first().json.body;\nreturn [{ json: { ...$json, status: cb.status, appNo: cb.appNo || null, error: cb.error || null } }];"
+      },
+      "name": "Merge Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        544
+      ],
+      "id": "b395d6f9-4e17-4af0-ae8a-6002932dd82f"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "awaiting_otp",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "awaiting_otp"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "submitted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "submitted"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "tier2_failed"
+        }
+      },
+      "name": "Callback Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        0,
+        544
+      ],
+      "id": "2a942e03-0214-4e0c-8193-abfb4c4abd2d"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'awaiting_otp', now() + interval '10 minutes', '{}'::jsonb);",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Transition: awaiting_otp",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        400
+      ],
+      "id": "b49d4beb-cdea-4b40-b8a0-bede604a038a",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Merge Callback').first().json.chat_id }}",
+        "text": "Aapke phone par abhi ek SMS code (OTP) aaya hoga. Use yahan turant bhejiye — main aapka aavedan abhi jama kar raha hoon. ⏱️",
+        "additionalFields": {}
+      },
+      "name": "Ask OTP",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        400
+      ],
+      "id": "0b0e9cf6-d078-4bfe-bcb2-f1be93a8cd23",
+      "webhookId": "b69484ac-c092-4a9a-89f7-041b7393bac6",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE applications SET app_number = $2 WHERE id = $1;\nSELECT transition($1, 'submitted', now() + ((SELECT (s.config->'slas'->>'acknowledge_days')::int FROM applications a JOIN schemes s ON s.id = a.scheme_id WHERE a.id = $1) || ' days')::interval, jsonb_build_object('app_number', $2));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }},{{ $json.appNo }}"
+        }
+      },
+      "name": "Transition: submitted",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        544
+      ],
+      "id": "174cda72-9159-4e11-9d05-71c03760105f",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Merge Callback').first().json.chat_id }}",
+        "text": "=Badhai ho! 🎉 Aapka aavedan jama ho gaya. Aavedan sankhya: {{ $('Merge Callback').first().json.appNo }}. Ab main iski nigrani karunga aur har badlav par aapko bataunga.",
+        "additionalFields": {}
+      },
+      "name": "Confirm Submitted",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        544
+      ],
+      "id": "568013b8-724c-401a-9e50-c3c5442b02f0",
+      "webhookId": "9f91c9d6-94aa-4771-ad20-f69731e1d04c",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE applications SET meta = meta || jsonb_build_object('tier2_fails', COALESCE((meta->>'tier2_fails')::int, 0) + 1) WHERE id = $1\nRETURNING (meta->>'tier2_fails')::int AS fails, id AS application_id;",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Count Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        704
+      ],
+      "id": "4f42b00d-b537-4b20-a4f8-54a7fa76e515",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fails }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Failed Twice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        704
+      ],
+      "id": "98ce9359-0b5f-480a-be4f-18650725a8d8"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE schemes SET config = jsonb_set(config, '{execution,tier2_recipe}', 'null'::jsonb)\nWHERE id = (SELECT scheme_id FROM applications WHERE id = $1) AND false; -- no-op guard: do NOT disable globally in V0\nSELECT $1 AS application_id;",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Prep Tier-3 Fallback",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        672,
+        640
+      ],
+      "id": "cda66e09-9b15-4b0a-85c6-ff0dbad065ec",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Downgrade is per-application: we re-run this same workflow but force the Tier-3 branch by overriding tier2_recipe in the next node."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id AS application_id, a.user_id, u.tg_chat_id AS chat_id, u.profile, u.language,\n  s.id AS scheme_id, s.config,\n  NULL AS tier2_recipe,\n  (s.config->'execution'->>'tier3_template') AS tier3_template\nFROM applications a JOIN users u ON u.id = a.user_id JOIN schemes s ON s.id = a.scheme_id\nWHERE a.id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Reload (Force Tier 3)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        640
+      ],
+      "id": "0bee9769-92d3-4944-88bf-9c790fcd9496",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3100/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ app_id: $json.application_id, recipe_id: $('Load App (Callback)').first().json.meta?.recipe_id, retry: true, callback_url: 'http://localhost:5678/webhook/haq-worker-callback' }) }}",
+        "options": {}
+      },
+      "name": "Retry Tier-2 Once",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        784
+      ],
+      "id": "10c5194c-be07-4a9f-9d89-3067daa7cbcd"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Executor Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Application": {
+      "main": [
+        [
+          {
+            "node": "Has Tier-2 Recipe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Tier-2 Recipe?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Tier-2 Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Tier-3 PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Tier-2 Job": {
+      "main": [
+        [
+          {
+            "node": "Transition: submitting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Tier-3 PDF": {
+      "main": [
+        [
+          {
+            "node": "Send PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send PDF": {
+      "main": [
+        [
+          {
+            "node": "Transition: pdf_sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Worker Callback": {
+      "main": [
+        [
+          {
+            "node": "Load App (Callback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load App (Callback)": {
+      "main": [
+        [
+          {
+            "node": "Merge Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Callback": {
+      "main": [
+        [
+          {
+            "node": "Callback Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Status": {
+      "main": [
+        [
+          {
+            "node": "Transition: awaiting_otp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Transition: submitted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Count Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transition: awaiting_otp": {
+      "main": [
+        [
+          {
+            "node": "Ask OTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transition: submitted": {
+      "main": [
+        [
+          {
+            "node": "Confirm Submitted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Failure": {
+      "main": [
+        [
+          {
+            "node": "Failed Twice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failed Twice?": {
+      "main": [
+        [
+          {
+            "node": "Prep Tier-3 Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry Tier-2 Once",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Tier-3 Fallback": {
+      "main": [
+        [
+          {
+            "node": "Reload (Force Tier 3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reload (Force Tier 3)": {
+      "main": [
+        [
+          {
+            "node": "Generate Tier-3 PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "24a8283d-c4ba-48bb-b3d4-ab4a77f7721b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6709d43f42265099711ffb435f8a201336ee4407b1919d9f157b2bf639ffa29"
+  },
+  "nodeGroups": [],
+  "id": "KTF66qA66AMQNmLE",
+  "tags": []
+}

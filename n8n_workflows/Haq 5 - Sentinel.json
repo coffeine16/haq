@@ -1,0 +1,577 @@
+{
+  "name": "Haq 5 - Sentinel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "name": "Hourly Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -656,
+        240
+      ],
+      "id": "74fd42cf-f2c4-49a9-8fa0-f5721d293a54"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id AS application_id, a.state, a.app_number, a.user_id,\n  u.tg_chat_id AS chat_id, u.language,\n  s.id AS scheme_id, s.config->'name'->>'hi' AS scheme_hi, s.config->'name'->>'en' AS scheme_en,\n  (s.config->'slas'->>'decision_days')::int AS decision_days,\n  s.config->'appeal'->>'grievance_dept' AS grievance_dept,\n  (SELECT json_agg(json_build_object('at', e.created_at, 'kind', e.kind, 'payload', e.payload) ORDER BY e.created_at)\n   FROM events e WHERE e.application_id = a.id) AS event_log\nFROM applications a\nJOIN users u ON u.id = a.user_id\nJOIN schemes s ON s.id = a.scheme_id\nWHERE a.deadline_at < now()\n  AND a.state NOT IN ('disbursed', 'closed')\nLIMIT 25;",
+        "options": {}
+      },
+      "name": "Find Breaches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -448,
+        240
+      ],
+      "id": "4f5d62ef-cd5e-47a6-b206-221ef8bb05a7",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "or",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "docs_pending",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "pdf_sent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "docs_pending_or_pdf"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "submitted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "submitted"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "under_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "under_review"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.state }}",
+                    "rightValue": "approved",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "approved"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "name": "By State",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -224,
+        240
+      ],
+      "id": "55a6f414-f883-4062-9d2d-d89809ced37b"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Yaad dilana chahta hoon 🔔: aapka {{ $json.scheme_hi || $json.scheme_en }} ka aavedan aage badhne ke liye aapke kadam ka intezaar kar raha hai. Agar form jama kar diya hai to 'JAMA' likhein; koi dikkat ho to bataiye — main madad karunga.",
+        "additionalFields": {}
+      },
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "198d77c1-2cad-4b25-a30b-5656c55ff8bb",
+      "webhookId": "bad5688c-a570-4572-869a-67370949ea10",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, $2, now() + interval '3 days', jsonb_build_object('action', 'reminder_sent'));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }},{{ $json.state }}"
+        }
+      },
+      "name": "Extend Deadline (Reminder)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        0
+      ],
+      "id": "43552599-2ee0-400d-8754-0eab0908ed20",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Main aapke {{ $json.scheme_hi || $json.scheme_en }} aavedan (#{{ $json.app_number }}) ki sthiti jaanch raha hoon. Agar aapko vibhag se koi SMS aaya ho, kripya use yahan forward kar dein — isse mujhe sahi jankari milegi. 🔍",
+        "additionalFields": {}
+      },
+      "name": "Ask SMS Forward",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        192
+      ],
+      "id": "26e9bf7a-f55f-4303-8e88-32bbdeea50ad",
+      "webhookId": "271ec558-505d-4934-a9a2-c474cefca2dc",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'under_review', now() + ($2 || ' days')::interval, jsonb_build_object('action', 'status_check'));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }},{{ $json.decision_days || 45 }}"
+        }
+      },
+      "name": "Transition: under_review",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        192
+      ],
+      "id": "182af81d-8b8d-46e1-841a-4167f419388c",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "V0 simplification: after the acknowledge window we assume the department has the file and move to under_review with the decision SLA. V1 adds portal status scraping here."
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst prompt = `Draft a formal CPGRAMS grievance in English from these facts only:\\nScheme: ${j.scheme_en}\\nDepartment: ${j.grievance_dept || 'concerned department'}\\nApplication number: ${j.app_number || 'not yet issued'}\\nStatutory decision window (days): ${j.decision_days || 45}\\nEvent log: ${JSON.stringify(j.event_log || [])}\\nStructure: applicant reference, scheme name, application number, date filed, statutory window, days elapsed, request for status and time-bound action. Polite, factual, no accusations. 150 words max. Output only the grievance text.`;\nreturn [{ json: { ...j, body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 2000, thinkingConfig: { thinkingBudget: 0 } } } } }];"
+      },
+      "name": "Build Grievance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        368
+      ],
+      "id": "c4bcfb83-5c0e-4a08-a169-962acc9512b9"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=AQ...............",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "name": "Draft Grievance (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        368
+      ],
+      "id": "ee6580e3-b29f-4454-8914-0ba661ce47cc"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Grievance').first().json;\nconst text = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\nreturn [{ json: { ...ctx, grievance_text: text } }];"
+      },
+      "name": "Parse Grievance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        368
+      ],
+      "id": "34808244-ad8d-4559-bde8-bcf5acb392b7"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=⚠️ Vibhag ne nirdharit samay mein aapke {{ $json.scheme_hi || $json.scheme_en }} aavedan par nirnay nahi liya. Maine aapki taraf se shikayat (grievance) ka masauda taiyaar kar diya hai:\n\n{{ $json.grievance_text }}\n\nIse darj karne ke liye 'HAAN' likhein. CPGRAMS link: https://pgportal.gov.in",
+        "additionalFields": {}
+      },
+      "name": "Send Grievance Draft",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        368
+      ],
+      "id": "79fdc005-390d-4a7b-be2a-79f237a64939",
+      "webhookId": "684fe99c-43b9-49f3-8347-11c1fff4184f",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'grievance_drafted', now() + interval '15 days', jsonb_build_object('grievance', $2));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }},{{ JSON.stringify($json.grievance_text) }}"
+        }
+      },
+      "name": "Transition: grievance_drafted",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        368
+      ],
+      "id": "eacfa103-3658-4607-ad9b-affaf8629012",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Khushkhabri ke baad ek jaanch 🔎: kya {{ $json.scheme_hi || $json.scheme_en }} ka paisa aapke khaate mein aa gaya? 'HAAN' ya 'NAHI' likhein. Agar nahi aaya, to main vibhag se iska pata lagaunga.",
+        "additionalFields": {}
+      },
+      "name": "Verify Disbursal",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        544
+      ],
+      "id": "e3576ec7-b0fe-4a6d-81fa-bdb5d8fbed6c",
+      "webhookId": "d8b197bf-e3b5-43ed-aa48-77aa224e4555",
+      "credentials": {
+        "telegramApi": {
+          "id": "k3L8aNCZtnz7qCpA",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, 'approved', now() + interval '7 days', jsonb_build_object('action', 'disbursal_check'));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }}"
+        }
+      },
+      "name": "Extend (Disbursal)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        224,
+        544
+      ],
+      "id": "3e635b2a-adb0-4cda-a5aa-64ec2b94f8f8",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT transition($1, $2, now() + interval '2 days', jsonb_build_object('action', 'sentinel_noop'));",
+        "options": {
+          "queryReplacement": "={{ $json.application_id }},{{ $json.state }}"
+        }
+      },
+      "name": "Extend (Other)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        0,
+        704
+      ],
+      "id": "ad49d555-c3cb-4fa4-bf82-3b83555e9d79",
+      "credentials": {
+        "postgres": {
+          "id": "TLeZmF5anlfPjFme",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Safety net: any breached state without a handler gets its deadline pushed so the cron never tight-loops."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Hourly Cron": {
+      "main": [
+        [
+          {
+            "node": "Find Breaches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Breaches": {
+      "main": [
+        [
+          {
+            "node": "By State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "By State": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask SMS Forward",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Grievance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verify Disbursal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extend (Other)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder": {
+      "main": [
+        [
+          {
+            "node": "Extend Deadline (Reminder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask SMS Forward": {
+      "main": [
+        [
+          {
+            "node": "Transition: under_review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Grievance": {
+      "main": [
+        [
+          {
+            "node": "Draft Grievance (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Grievance (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Parse Grievance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Grievance": {
+      "main": [
+        [
+          {
+            "node": "Send Grievance Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Grievance Draft": {
+      "main": [
+        [
+          {
+            "node": "Transition: grievance_drafted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Disbursal": {
+      "main": [
+        [
+          {
+            "node": "Extend (Disbursal)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a5881685-98e0-4c57-bc2a-96c6e89b8f04",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6709d43f42265099711ffb435f8a201336ee4407b1919d9f157b2bf639ffa29"
+  },
+  "nodeGroups": [],
+  "id": "pOx7a8G1wu270mkY",
+  "tags": []
+}

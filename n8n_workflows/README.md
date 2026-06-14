@@ -1,6 +1,8 @@
 # Haq — n8n Workflows
 
-Five workflows orchestrate the entire agent. Import in dependency order; later workflows reference earlier ones via Execute-Sub-Workflow nodes.
+ Five workflows orchestrate the entire agent. Import in dependency order; later workflows reference earlier ones via Execute-Sub-Workflow nodes.
+
++> The JSONs in this folder are exported from the live deployment running at the bot URL — Sub-workflow caller nodes already have their inputs mapped, "Attempt To Convert Types" toggled on, the eligibility engine annualization, and the PDF service URL set for in-container Docker networking. The wiring instructions below are still the cleanest reference if you're starting fresh.
 
 | File | Workflow | Trigger | Responsibility |
 |---|---|---|---|
